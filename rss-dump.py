@@ -4,7 +4,11 @@
 # Author: Chris Ward <chris@zeroknowledge.fm>
 
 __app_name__ = "rss-dump"
-__version__ = "0.1"
+__version__ = "0.2"
+'''
+0.1: download mp3's and a full xml backup plus json
+0.2: download cover images & transcripts
+'''
 
 # Archive the zeroknowledge.fm rss feed
 
@@ -16,6 +20,7 @@ import requests
 import sys
 from dateutil import parser as dtparse
 import feedparser # // pip install feedparser
+import eyed3 # // pip install eyed3
 
 import hashlib
 import logging
@@ -41,57 +46,14 @@ class FeedParser:
         # override whatever tempfile.gettempdir() offers .... FIXME cleanup
         #import tempfile
         #tmp_dir = tempfile.gettempdir() # prints the current temporary directory
-        tmp_dir = './' 
-        self.outpath = os.path.join(tmp_dir, 'out')
-        self.outpath_mp3 = os.path.join(self.outpath, 'mp3')
-        log.info(f'Saving to {outpath_mp3}')
+        self.tmp_dir = './' 
+        url_name = self._autoname(rss_url)
+        self.outpath = os.path.join(self.tmp_dir, f'{url_name}-out')
+        log.info(f'Saving to {self.outpath}')
 
         # check if a folder exists where to store the backup
         if not os.path.exists(self.outpath):  # FIXME: redudant? since below we makedirs again?
             os.makedirs(self.outpath)
-        if not os.path.exists(self.outpath_mp3):
-            os.makedirs(self.outpath_mp3)
-
-    def _autoname(self, name, prefix=None, ext=None, x_http=True):
-    # Make names readable, for humans and machines
-        _name = name.strip()
-        _name = re.sub('https?://', '', _name) if x_http else _name
-        _name = re.sub(r'[^a-zA-Z0-9_ ./]', '', _name)
-        _name = re.sub(r'[./]', '_', _name)
-        _name = re.sub(r'Episode', 'Ep', _name)
-        _name = re.sub(r'[-\s_]+', '_', _name)
-        _name = _name.title()
-        _name = f"{prefix}_{_name}" if prefix else _name
-        _name = f"{_name}.{ext}" if ext else _name
-        return _name
-        
-    def _dump_file(self, data, filepath):
-    # dump some data to a file on disk
-        filepath = os.path.join(self.outpath, filepath)
-        with open(filepath, 'w') as f:
-            try:
-                json.dump(data, f)
-                print(f'JSON dumped: {filepath}')
-            except Exception as error:
-                with open(filepath, 'w') as f:
-                    f.write(data.text)
-                    print(f'File saved: {filepath}')
-        
-    def download(self, url, save_as='', overwrite=False): 
-    # Download a url and save the result to disk
-        save_as = save_as or self._autoname(url)
-        save_as = os.path.join(self.outpath, save_as)
-        path_exists = os.path.exists(save_as)
-        
-        log.debug (f'Downloading {url} > {save_as}')    
-        if path_exists and not overwrite:
-            log.debug (f" ... skpping, cached: {save_as}")
-        else:
-            resp = requests.get(url)
-            with open(save_as, "wb") as f: # opening a file handler to create new file 
-                f.write(resp.content) # writing content to file
-            log.info ( self.hash_file(save_as) ) 
-        return self.hash_file(save_as)
 
     def hash_file(self, filename):
     # Get a sha256 hash of the file for later reference
@@ -109,39 +71,139 @@ class FeedParser:
         # return the hex digest
         return h_sha256.hexdigest()
         
+    def dump_file(self, data, save_as):
+    # dump some data to a file on disk
+        save_path = os.path.dirname(save_as)
+        if not os.path.exists(save_path):  # FIXME: redudant? since below we makedirs again?
+            os.makedirs(save_path)
+        with open(save_as, 'w') as f:
+            try:
+                json.dump(data, f)
+                print(f'JSON dumped: {save_as}')
+            except Exception as error:
+                with open(save_as, 'w') as f:
+                    f.write(data.text)
+                    print(f'File saved: {save_as}')
+        
+    def _autoname(self, name, prefix=None, ext=None, x_http=True):
+    # Make names readable, for humans and machines
+        _name = name.strip()
+        _name = re.sub('https?://', '', _name) if x_http else _name
+        _name = re.sub(r'[^a-zA-Z0-9_ ./]', '', _name)
+        _name = re.sub(r'[./]', '_', _name)
+        _name = re.sub(r'Episode', 'Ep', _name)
+        _name = re.sub(r'[-\s_]+', '_', _name)
+        _name = _name.title()
+        _name = f"{prefix}_{_name}" if prefix else _name
+        _name = f"{_name}.{ext}" if ext else _name
+        return _name
+        
+    def download(self, url, save_as='', overwrite=False): 
+    # Download a url and save the result to disk
+        save_as = save_as or self._autoname(url)
+        save_path = os.path.dirname(save_as)
+        path_exists = os.path.exists(save_as)
+        
+        log.debug (f'Downloading {url} > {save_as}')    
+        if path_exists and not overwrite:
+            log.debug (f" ... skpping, cached: {save_as}")
+        else:
+            if not os.path.exists(save_path):  # FIXME: redudant? since below we makedirs again?
+                os.makedirs(save_path)
+            resp = requests.get(url)
+            with open(save_as, "wb") as f: # opening a file handler to create new file 
+                f.write(resp.content) # writing content to file
+        return self.hash_file(save_as)
+
+    def _walk_entries(self, entries):
+        filehashes = {}
+        for i in entries:
+            pub_dt = dtparse.parse(i['published']).strftime('%Y%m%d')
+            title = i['title']
+            fn = self._autoname(f'{title}')
+            fn_path = os.path.join(self.outpath, fn)
+            fn_json = f'{fn_path}/{pub_dt}_{fn}.json'
+            fn_mp3 = f'{fn_path}/{pub_dt}_{fn}.mp3'
+            fn_img = f'{fn_path}/{pub_dt}_{fn}' # add ext later
+            fn_tra = f'{fn_path}/{pub_dt}_{fn}.txt'
+            fn_ep_img = f'{fn_path}/{pub_dt}_{fn}'
+
+            # save the entry as a json
+            self.dump_file(i, fn_json)
+
+            # save episode mp3
+            urls = [l['href'] for l in i['links'] if l['rel'] == 'enclosure']
+            mp3_url = urls[0] if len(urls) > 0 else None
+            mp3_sha256 = self.download(mp3_url, fn_mp3)
+
+            # save episode cover image
+            # 'image': {'href': 'https://.../cover.jpg?v=10'}
+            img_url = i['image'].get('href', '').split('?')[0]
+            img_ext = img_url.split('.')[-1] or 'JPG'
+            fn_img = fn_img + '.' + img_ext
+            img_sha256 = self.download(img_url, fn_img)
+
+            # Save transcript 'podcast_transcript'
+            # 'podcast_transcript': {'url': 'https://.../transcript.txt', 'type': 'text/plain'}
+            try:
+                tra_url = i['podcast_transcript'].get('url', '').split('?')[0]
+            except KeyError:
+                log.error('^^^^^^^^ ERROR ^^^^^^^^ Missing key: podcast_transcript')
+            else:
+                tra_sha256 = self.download(tra_url, fn_tra)
+
+            # extract out the images stored in the mp3 itself (there is other stuff in there to....)
+            audio_file = eyed3.load(fn_mp3)
+            album_name = audio_file.tag.album
+            artist_name = audio_file.tag.artist
+            k = 0
+            for image in audio_file.tag.images:
+                img_path = f"{fn_ep_img}_{k}.jpg"
+                log.debug(f"Writing image file: {img_path}")
+                img_file = open(img_path, "wb")
+                k += 1
+                img_file.write(image.image_data)
+                img_file.close()
+
+            filehashes = {
+                    fn_mp3: {'url': mp3_url, 'sha256': mp3_sha256},
+                    fn_img: {'url': img_url, 'sha256': img_sha256},
+                    fn_tra: {'url': tra_url, 'sha256': tra_sha256},
+                    # add images extracted from mp3?
+            }
+
+        k = len(entries)
+        print (f'{k} entries.')
+        return filehashes
+
     def save(self):
         # Backup the main rss feed / json feed dump
         today = date.today().isoformat().replace('-', '')
-        
-    # Make the archive; save the xml and json converted plus all entries mp3
-    # FIXME: save other media
+
+        # Make the archive; save the xml and json converted plus all entries mp3
+        # FIXME: save other media
         self.rss_xml = requests.get(self.rss_url)       
         self.rss_json = feedparser.parse(self.rss_url)     
 
-        k = 0
         entries = self.rss_json['entries']
-        hashes = []
-        for i in entries:
-            pub_dt = dtparse.parse(i['published']).strftime('%Y%m%d')
-            urls = [l['href'] for l in i['links'] if l['rel'] == 'enclosure']
-            url = urls[0] if len(urls) > 0 else None
-            out_mp3 = self._autoname(i['title'], f"mp3/{pub_dt}", 'mp3')
-            hash_sha256 = self.download(url, out_mp3) # cache, only download if newly available
-            hashes.append(hash_sha256)
-            k += 1
-        self.rss_json['HASHES'] = hashes
+        # Walk through every RSS entry one by one, get file hashes
+        filehashes = self._walk_entries(entries)
+        self.rss_json['file_hashes'] = filehashes
         # force these to backup new everytime
-        self._dump_file(self.rss_xml, self._autoname(self.rss_url, today, ext='xml'))
+        self.dump_file(self.rss_xml, self._autoname(self.rss_url, today, ext='xml'))
         # add hashes to json. FIXME: Add also to xml for consistency... ^^^^^^^^^^^^^^^^^^^^^
-        self._dump_file(self.rss_json, self._autoname(self.rss_url, today, ext='json'))
-        self._dump_file(hashes, self._autoname('hashes', ext='json'))
+        self.dump_file(self.rss_json, self._autoname(self.rss_url, today, ext='json'))
+        self.dump_file(filehashes, self._autoname('filehashes', ext='json'))
         
-        print (f'{k} entries.')
         last_title = entries[0]['title']
         print (f'Last entry: {last_title}')
 
 if __name__ == "__main__":
     # Backup the entire zeroknowledge podcast feed
+
+    # TRY: https://eprint.iacr.org/rss/rss.xml
+    # Requires having class for each... the XML is different between this xml and the zk rss 
+
     furl = 'https://feeds.fireside.fm/zeroknowledge/rss'
     furl = sys.argv[1] if len(sys.argv) > 1 else furl
     feed = FeedParser(furl, quiet=False)

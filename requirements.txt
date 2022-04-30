@@ -1,0 +1,4 @@
+feedparser
+eyed3
+hashlib
+python-dateutil
