@@ -28,6 +28,9 @@ log_format = ' > %(message)s'
 logging.basicConfig(level=logging.DEBUG, format=log_format)
 log = logging.getLogger()
 
+# quiet down a little...
+logging.getLogger("requests").setLevel(logging.WARNING)
+
 #feed_json['entries'][0].keys()
 # 'title', 'title_detail', 'links', 'link', 'id', 'guidislink', 
 # 'published', 'published_parsed', 'authors', 'author', 'author_detail', 
@@ -49,12 +52,24 @@ class FeedParser:
         self.tmp_dir = './' 
         url_name = self._autoname(rss_url)
         self.outpath = os.path.join(self.tmp_dir, f'{url_name}-out')
-        log.info(f'Saving to {self.outpath}')
-
+        log.debug(f'Saving to {self.outpath}')
         # check if a folder exists where to store the backup
         if not os.path.exists(self.outpath):  # FIXME: redudant? since below we makedirs again?
             os.makedirs(self.outpath)
 
+    def _autoname(self, name, prefix=None, ext=None, x_http=True):
+    # Make names readable, for humans and machines
+        _name = name.strip()
+        _name = re.sub('https?://', '', _name) if x_http else _name
+        _name = re.sub(r'[^a-zA-Z0-9_ ./]', '', _name)
+        _name = re.sub(r'[./]', '_', _name)
+        _name = re.sub(r'Episode', 'Ep', _name)
+        _name = re.sub(r'[-\s_]+', '_', _name)
+        _name = _name.title()
+        _name = f"{prefix}_{_name}" if prefix else _name
+        _name = f"{_name}.{ext}" if ext else _name
+        return _name
+        
     def hash_file(self, filename):
     # Get a sha256 hash of the file for later reference
         if os.path.isfile(filename) is False:
@@ -72,31 +87,23 @@ class FeedParser:
         return h_sha256.hexdigest()
         
     def dump_file(self, data, save_as):
-    # dump some data to a file on disk
+        log.debug(f'Saving data to file: {save_as}')
+        #log.debug(f'data: {data}')
+        # dump some data to a file on disk
         save_path = os.path.dirname(save_as)
-        if not os.path.exists(save_path):  # FIXME: redudant? since below we makedirs again?
+        if save_path and not os.path.exists(save_path):  # FIXME: redudant? since below we makedirs again?
             os.makedirs(save_path)
-        with open(save_as, 'w') as f:
-            try:
-                json.dump(data, f)
-                print(f'JSON dumped: {save_as}')
-            except Exception as error:
-                with open(save_as, 'w') as f:
-                    f.write(data.text)
-                    print(f'File saved: {save_as}')
-        
-    def _autoname(self, name, prefix=None, ext=None, x_http=True):
-    # Make names readable, for humans and machines
-        _name = name.strip()
-        _name = re.sub('https?://', '', _name) if x_http else _name
-        _name = re.sub(r'[^a-zA-Z0-9_ ./]', '', _name)
-        _name = re.sub(r'[./]', '_', _name)
-        _name = re.sub(r'Episode', 'Ep', _name)
-        _name = re.sub(r'[-\s_]+', '_', _name)
-        _name = _name.title()
-        _name = f"{prefix}_{_name}" if prefix else _name
-        _name = f"{_name}.{ext}" if ext else _name
-        return _name
+            log.debug(f"Making dir: {save_as}")
+
+            with open(save_as, 'w') as f:
+                try:
+                    json.dump(data, f)
+                    print(f'JSON dumped: {save_as}')
+                except Exception as error:
+                    with open(save_as, 'w') as f:
+                        f.write(data.text)
+                        print(f'File saved: {save_as}')
+
         
     def download(self, url, save_as='', overwrite=False): 
     # Download a url and save the result to disk
@@ -104,7 +111,8 @@ class FeedParser:
         save_path = os.path.dirname(save_as)
         path_exists = os.path.exists(save_as)
         
-        log.debug (f'Downloading {url} > {save_as}')    
+        log.info (f'Downloading {url}')    
+        log.debug (f'... as > {save_as}')    
         if path_exists and not overwrite:
             log.debug (f" ... skpping, cached: {save_as}")
         else:
@@ -148,18 +156,28 @@ class FeedParser:
             try:
                 tra_url = i['podcast_transcript'].get('url', '').split('?')[0]
             except KeyError:
-                log.error('^^^^^^^^ ERROR ^^^^^^^^ Missing key: podcast_transcript')
+                log.error(f'^^^^^^^^ ERROR ^^^^^^^^ Missing key for ({title}): podcast_transcript')
             else:
                 tra_sha256 = self.download(tra_url, fn_tra)
 
             # extract out the images stored in the mp3 itself (there is other stuff in there to....)
+            #_log = eyed3.utils.log
+            #_log.setLevel(logging.WARN)
+            # Override the module's logging defaults; it's a bit too noisy, we quiet it down here.
+            eyed3.log.setLevel(logging.WARN)
+            #print ("!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
             audio_file = eyed3.load(fn_mp3)
-            album_name = audio_file.tag.album
-            artist_name = audio_file.tag.artist
+            #print ("!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            #artist_name = audio_file.tag.artist
             k = 0
             for image in audio_file.tag.images:
                 img_path = f"{fn_ep_img}_{k}.jpg"
-                log.debug(f"Writing image file: {img_path}")
+                if os.path.exists(img_path):
+                    log.debug(f"... skipping {img_path} (cached)")
+                    continue
+                # else
+                log.info(f"Writing image")
+                log.debug(f"... {img_path}")
                 img_file = open(img_path, "wb")
                 k += 1
                 img_file.write(image.image_data)
@@ -185,15 +203,21 @@ class FeedParser:
         self.rss_xml = requests.get(self.rss_url)       
         self.rss_json = feedparser.parse(self.rss_url)     
 
+        # these are all entries of the show; all episodes
         entries = self.rss_json['entries']
         # Walk through every RSS entry one by one, get file hashes
         filehashes = self._walk_entries(entries)
-        self.rss_json['file_hashes'] = filehashes
+
+        rss_url_name_xml = self._autoname(self.rss_url, today, ext='xml')
+        rss_url_name_json = self._autoname(self.rss_url, today, ext='json')
+        rss_filehashes_json = self._autoname('filehashes', today, ext='json')
+
+        print (rss_url_name_xml, rss_url_name_json, rss_filehashes_json)
+        print (self.rss_xml)
         # force these to backup new everytime
-        self.dump_file(self.rss_xml, self._autoname(self.rss_url, today, ext='xml'))
-        # add hashes to json. FIXME: Add also to xml for consistency... ^^^^^^^^^^^^^^^^^^^^^
-        self.dump_file(self.rss_json, self._autoname(self.rss_url, today, ext='json'))
-        self.dump_file(filehashes, self._autoname('filehashes', ext='json'))
+        self.dump_file(self.rss_xml, rss_url_name_xml)
+        self.dump_file(self.rss_json, rss_url_name_json)
+        self.dump_file(filehashes, rss_filehashes_json)
         
         last_title = entries[0]['title']
         print (f'Last entry: {last_title}')
