@@ -4,11 +4,12 @@
 # Author: Chris Ward <chris@zeroknowledge.fm>
 
 __app_name__ = "rss-dump"
-__version__ = "0.2"
+__version__ = "0.3.1"
 '''
-0.1: download mp3's and a full xml backup plus json
-0.2: download cover images & transcripts
-0.3: download research docs from iacr
+0.1.0: download mp3's and a full xml backup plus json
+0.2.0: download cover images & transcripts
+0.3.0: download research docs from iacr
+0.3.1:
 '''
 
 # Archive the zeroknowledge.fm rss feed
@@ -49,6 +50,7 @@ class FeedParser:
         log.setLevel(log_lvl)
         log.debug(f'Setting log level: {log_lvl}')
 
+        # FIXME: move to .set_outdir()
         self.rss_url = rss_url
 
         # override whatever tempfile.gettempdir() offers .... FIXME cleanup
@@ -97,9 +99,10 @@ class FeedParser:
         # log.debug(f'data: {data}')
         # dump some data to a file on disk
         save_path = os.path.dirname(save_as)
-        if save_path and not os.path.exists(save_path):
-            log.debug(f"Making dir: {save_path}")
-            os.makedirs(save_path)
+        if save_path:
+            if not os.path.exists(save_path):
+                log.debug(f"Making dir: {save_path}")
+                os.makedirs(save_path)
 
             with open(save_as, 'w') as f:
                 try:
@@ -111,6 +114,8 @@ class FeedParser:
                     with open(save_as, 'w') as f:
                         f.write(data.text)
                         print(f'File saved: {save_as}')
+        # FIXME: RETURN FILE HASH
+        return
 
     def download(self, url, save_as='', overwrite=False):
         # Download a url and save the result to disk
@@ -248,25 +253,23 @@ class IACRFeedParser (FeedParser):
     def _walk_entries(self, entries):
         filehashes = {}
         for i in entries:
-            print(i)
-            pub_dt = TODAY_ISO_NAME
             title = i['title']
-            fn = self._autoname(f'{title}')
-            fn_path = os.path.join(self.outpath, fn)
-            fn_json = f'{fn_path}/{pub_dt}_{fn}.json'
-            fn_pdf = f'{fn_path}/{pub_dt}_{fn}.pdf'
-
-            # save the entry as a json
-            self.dump_file(i, fn_json)
 
             # save linked document
             url = i['link']
             url_pdf = f"{url}.pdf"
 
-            filehashes['pdf'] = {
-                'sha256': self.download(url_pdf, fn_pdf)
-            }
+            pub_year, pub_k = url.split('/')[-2:]
 
+            fn = self._autoname(f'{title}')
+            fn_path = os.path.join(self.outpath, pub_year)
+            fn_json = os.path.join(fn_path, 'json', f'{pub_k}-{fn}.json')
+            fn_pdf = os.path.join(fn_path, 'pdf', f'{pub_k}-{fn}.pdf')
+
+            filehashes = {
+                'pdf': {'sha256': self.download(url_pdf, fn_pdf)},
+                'json': {'sha256': self.dump_file(i, fn_json)}
+            }
         k = len(entries)
         log.info(f'{k} entries.')
         return filehashes
@@ -274,12 +277,10 @@ class IACRFeedParser (FeedParser):
 
 if __name__ == "__main__":
     # Backup the entire zeroknowledge podcast feed
-
-    # TRY: https://eprint.iacr.org/rss/rss.xml
-    # Requires having class for each...
-    # the XML is different between this xml and the zk rss
-
     furl = 'https://feeds.fireside.fm/zeroknowledge/rss'
     furl = sys.argv[1] if len(sys.argv) > 1 else furl
     feed = IACRFeedParser(furl, quiet=False)
     feed.save()
+
+    # XML for this feed is different from zk rss
+    # furl = 'https://eprint.iacr.org/rss/rss.xml'
