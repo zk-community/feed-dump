@@ -37,19 +37,19 @@ logging.getLogger("requests").setLevel(logging.WARNING)
 # 'itunes_episodetype', 'subtitle', 'subtitle_detail', 'itunes_duration', 
 # 'itunes_explicit', 'image', 'podcast_transcript', 'summary', 'summary_detail', 
 # 'tags', 'content', 'fireside_playerurl', 'fireside_playerembedcode', 'podcast_person'
-        
+
 class FeedParser:
     def __init__(self, rss_url, quiet=True):
         log_lvl = logging.INFO if quiet else logging.DEBUG
         log.setLevel(log_lvl)
         log.debug(f'Setting log level: {log_lvl}')
-        
+
         self.rss_url = rss_url
 
         # override whatever tempfile.gettempdir() offers .... FIXME cleanup
         #import tempfile
         #tmp_dir = tempfile.gettempdir() # prints the current temporary directory
-        self.tmp_dir = './' 
+        self.tmp_dir = './'
         url_name = self._autoname(rss_url)
         self.outpath = os.path.join(self.tmp_dir, f'{url_name}-out')
         log.debug(f'Saving to {self.outpath}')
@@ -69,7 +69,7 @@ class FeedParser:
         _name = f"{prefix}_{_name}" if prefix else _name
         _name = f"{_name}.{ext}" if ext else _name
         return _name
-        
+
     def hash_file(self, filename):
     # Get a sha256 hash of the file for later reference
         if os.path.isfile(filename) is False:
@@ -81,11 +81,11 @@ class FeedParser:
             # read file in chunks and update hash
             chunk = 0
             while chunk != b'':
-                chunk = file.read(1024) 
+                chunk = file.read(1024)
                 h_sha256.update(chunk)
         # return the hex digest
         return h_sha256.hexdigest()
-        
+
     def dump_file(self, data, save_as):
         log.debug(f'Saving data to file: {save_as}')
         #log.debug(f'data: {data}')
@@ -104,15 +104,15 @@ class FeedParser:
                         f.write(data.text)
                         print(f'File saved: {save_as}')
 
-        
-    def download(self, url, save_as='', overwrite=False): 
+
+    def download(self, url, save_as='', overwrite=False):
     # Download a url and save the result to disk
         save_as = save_as or self._autoname(url)
         save_path = os.path.dirname(save_as)
         path_exists = os.path.exists(save_as)
-        
-        log.info (f'Downloading {url}')    
-        log.debug (f'... as > {save_as}')    
+
+        log.info (f'Downloading {url}')
+        log.debug (f'... as > {save_as}')
         if path_exists and not overwrite:
             log.debug (f" ... skpping, cached: {save_as}")
         else:
@@ -200,8 +200,8 @@ class FeedParser:
 
         # Make the archive; save the xml and json converted plus all entries mp3
         # FIXME: save other media
-        self.rss_xml = requests.get(self.rss_url)       
-        self.rss_json = feedparser.parse(self.rss_url)     
+        self.rss_xml = requests.get(self.rss_url)
+        self.rss_json = feedparser.parse(self.rss_url)
 
         # these are all entries of the show; all episodes
         entries = self.rss_json['entries']
@@ -218,7 +218,7 @@ class FeedParser:
         self.dump_file(self.rss_xml, rss_url_name_xml)
         self.dump_file(self.rss_json, rss_url_name_json)
         self.dump_file(filehashes, rss_filehashes_json)
-        
+
         last_title = entries[0]['title']
         print (f'Last entry: {last_title}')
 
