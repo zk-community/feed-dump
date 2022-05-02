@@ -1,2 +1,2 @@
-# rss-dump
-Simple tool to help dump rss feed data and backup podcasts
+# feed-dump
+Simple tool to help dump feed content for archivable purposes
